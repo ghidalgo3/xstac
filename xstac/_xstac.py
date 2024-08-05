@@ -108,6 +108,9 @@ def maybe_infer_step(da, step):
 
 
 def build_temporal_dimension(ds, name, extent, values, step):
+    # TODO guhidalgo: if the dataset is a cf dataset then
+    # call xr.cftime_range instead of pd_todatime
+
     time = ds.coords[name]
     start = time.min(keepdims=True)
     end = time.max(keepdims=True)
@@ -213,17 +216,25 @@ def maybe_infer_reference_system(ds, reference_system) -> dict:
             reference_system = pyproj.CRS.from_user_input(
                 ds.attrs["crs"]
             ).to_json_dict()
+        elif "crs" in ds.variables and "wkt" in ds.variables["crs"].attrs:
+            reference_system = pyproj.CRS.from_wkt(
+                ds.variables["crs"].attrs["wkt"]
+            ).to_json_dict()
         else:
             # try to infer it
             names = [
                 k for k, v in ds.variables.items() if "grid_mapping_name" in v.attrs
             ]
             if not names:
-                raise ValueError("Couldn't find a reference system")
+                if len(ds.cf.keys()):
+                    crs = pyproj.CRS.from_epsg(4326)
+                else:
+                    raise ValueError("Couldn't find a reference system")
             elif len(names) > 1:
                 raise ValueError("Too many reference systems: %s", names)
-            (name,) = names
-            crs = CRS.from_cf(ds[name].attrs)
+            else:
+                (name,) = names
+                crs = CRS.from_cf(ds[name].attrs)
             reference_system = crs.to_json_dict()
 
     elif reference_system is False:
@@ -471,6 +482,12 @@ def xarray_to_stac(
             for k, v in list(ext.properties[obj][var].items()):
                 if v is None:
                     del ext.properties[obj][var][k]
+                elif k == "attrs":
+                    for attr, value in v.items():
+                        if isinstance(value, np.generic):
+                            v[attr] = value.item()
+                        elif isinstance(value, np.ndarray):
+                            v[attr] = value.tolist()
     stac_obj = result
 
     if kerchunk_indices:
